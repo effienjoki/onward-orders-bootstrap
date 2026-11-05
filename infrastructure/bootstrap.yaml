@@ -1,0 +1,147 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Onward Logistics order system bootstrap. Things that must exist before the
+  application pipeline or the ECS service can run: the ECR repository, the
+  GitHub OIDC provider, and the role GitHub Actions assumes to push images.
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, test, prod]
+  GitHubOwner:
+    Type: String
+    Default: effienjoki
+  AppRepoName:
+    Type: String
+    Default: onward-orders-app
+  CreateGitHubOidcProvider:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: Set to false if the GitHub OIDC provider already exists in this account.
+
+Conditions:
+  CreateOidc: !Equals [!Ref CreateGitHubOidcProvider, 'true']
+
+Resources:
+
+  # ---------- ECR repository: where the order images live ----------
+
+  OrdersRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub onward-${Environment}-orders
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      ImageTagMutability: MUTABLE
+      EmptyOnDelete: true
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Delete untagged images after 1 day",
+                "selection": {
+                  "tagStatus": "untagged",
+                  "countType": "sinceImagePushed",
+                  "countUnit": "days",
+                  "countNumber": 1
+                },
+                "action": { "type": "expire" }
+              },
+              {
+                "rulePriority": 2,
+                "description": "Keep only the 10 most recent images",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 10
+                },
+                "action": { "type": "expire" }
+              }
+            ]
+          }
+
+  # ---------- GitHub OIDC provider: AWS trusts GitHub's tokens ----------
+
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateOidc
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      ThumbprintList:
+        - 6938fd4d98bab03faadb97b34396831e3780aea1
+        - 1c58a3a8518e8759bf075b76b750d4f2df264fcd
+
+  # ---------- What GitHub Actions may do: push to this one repository ----------
+
+  GitHubEcrPushPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Push images to the Onward orders ECR repository only.
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: GetLoginToken
+            Effect: Allow
+            Action: ecr:GetAuthorizationToken
+            Resource: '*'
+          - Sid: PushToOrdersRepositoryOnly
+            Effect: Allow
+            Action:
+              - ecr:BatchCheckLayerAvailability
+              - ecr:InitiateLayerUpload
+              - ecr:UploadLayerPart
+              - ecr:CompleteLayerUpload
+              - ecr:PutImage
+              - ecr:BatchGetImage
+              - ecr:GetDownloadUrlForLayer
+            Resource: !GetAtt OrdersRepository.Arn
+
+  # ---------- The role GitHub Actions assumes with OIDC ----------
+
+  GitHubActionsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: Assumed by GitHub Actions in the app repo main branch, via OIDC, to push images.
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If
+                - CreateOidc
+                - !Ref GitHubOidcProvider
+                - !Sub arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                'token.actions.githubusercontent.com:aud': sts.amazonaws.com
+                'token.actions.githubusercontent.com:sub': !Sub repo:${GitHubOwner}/${AppRepoName}:ref:refs/heads/main
+      ManagedPolicyArns:
+        - !Ref GitHubEcrPushPolicy
+      Tags:
+        - Key: Name
+          Value: !Sub onward-${Environment}-github-ecr-push-role
+
+Outputs:
+  RepositoryName:
+    Value: !Ref OrdersRepository
+    Export:
+      Name: !Sub onward-${Environment}-orders-bootstrap-RepositoryName
+  RepositoryUri:
+    Value: !GetAtt OrdersRepository.RepositoryUri
+    Export:
+      Name: !Sub onward-${Environment}-orders-bootstrap-RepositoryUri
+  RepositoryArn:
+    Value: !GetAtt OrdersRepository.Arn
+    Export:
+      Name: !Sub onward-${Environment}-orders-bootstrap-RepositoryArn
+  GitHubActionsRoleArn:
+    Description: Put this in the app repo as a GitHub variable (not a secret, it is not sensitive).
+    Value: !GetAtt GitHubActionsRole.Arn

@@ -1,0 +1,10 @@
+template-file-path: infrastructure/bootstrap.yaml
+parameters:
+  Environment: dev
+  GitHubOwner: effienjoki
+  AppRepoName: onward-orders-app
+  CreateGitHubOidcProvider: 'true'
+tags:
+  Project: onward
+  Owner: Effie Njoki
+  Environment: dev
