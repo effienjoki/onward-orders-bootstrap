@@ -2,7 +2,9 @@ template-file-path: infrastructure/bootstrap.yaml
 parameters:
   Environment: dev
   GitHubOwner: effienjoki
+  GitHubOwnerId: '330395797'
   AppRepoName: onward-orders-app
+  AppRepoId: '1446399180'
   CreateGitHubOidcProvider: 'true'
 tags:
   Project: onward

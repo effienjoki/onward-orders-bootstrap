@@ -15,6 +15,12 @@ Parameters:
   AppRepoName:
     Type: String
     Default: onward-orders-app
+  GitHubOwnerId:
+    Type: String
+    Description: Immutable GitHub account ID, as it appears in the OIDC token subject.
+  AppRepoId:
+    Type: String
+    Description: Immutable GitHub repository ID, as it appears in the OIDC token subject.
   CreateGitHubOidcProvider:
     Type: String
     Default: 'true'
@@ -122,7 +128,7 @@ Resources:
             Condition:
               StringEquals:
                 'token.actions.githubusercontent.com:aud': sts.amazonaws.com
-                'token.actions.githubusercontent.com:sub': !Sub repo:${GitHubOwner}/${AppRepoName}:ref:refs/heads/main
+                'token.actions.githubusercontent.com:sub': !Sub repo:${GitHubOwner}@${GitHubOwnerId}/${AppRepoName}@${AppRepoId}:ref:refs/heads/main
       ManagedPolicyArns:
         - !Ref GitHubEcrPushPolicy
       Tags:
