@@ -3,7 +3,7 @@ parameters:
   Environment: dev
   GitHubOwner: effienjoki
   AppRepoName: onward-orders-app
-  CreateGitHubOidcProvider: 'true'
+  CreateGitHubOidcProvider: 'false'
 tags:
   Project: onward
   Owner: Effie Njoki
