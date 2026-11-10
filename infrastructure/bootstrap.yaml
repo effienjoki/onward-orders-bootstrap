@@ -21,6 +21,15 @@ Parameters:
   AppRepoId:
     Type: String
     Description: Immutable GitHub repository ID, as it appears in the OIDC token subject.
+  InfraRepoName:
+    Type: String
+    Default: onward-orders-infrastructure
+  InfraRepoId:
+    Type: String
+    Description: Immutable GitHub ID of the infrastructure repository.
+  DeployRoleArn:
+    Type: String
+    Description: Existing CloudFormation service role that builds the infrastructure (bootstrap exception).
   CreateGitHubOidcProvider:
     Type: String
     Default: 'true'
@@ -135,6 +144,103 @@ Resources:
         - Key: Name
           Value: !Sub onward-${Environment}-github-ecr-push-role
 
+
+  # ---------- Templates bucket: child templates for the nested stacks ----------
+
+  TemplatesBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub onward-${Environment}-orders-templates-${AWS::AccountId}
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldTemplateVersions
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 30
+
+  # ---------- What the infrastructure pipeline may do ----------
+
+  InfraDeployPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Upload child templates and deploy the Onward ECS stacks through the CloudFormation deploy role.
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: UploadTemplates
+            Effect: Allow
+            Action:
+              - s3:PutObject
+              - s3:GetObject
+            Resource: !Sub ${TemplatesBucket.Arn}/*
+          - Sid: ReadTemplatesBucket
+            Effect: Allow
+            Action:
+              - s3:ListBucket
+              - s3:GetBucketLocation
+            Resource: !GetAtt TemplatesBucket.Arn
+          - Sid: DeployOnwardEcsStacksOnly
+            Effect: Allow
+            Action:
+              - cloudformation:CreateStack
+              - cloudformation:UpdateStack
+              - cloudformation:DescribeStacks
+              - cloudformation:DescribeStackEvents
+              - cloudformation:DescribeStackResources
+              - cloudformation:GetTemplate
+              - cloudformation:CreateChangeSet
+              - cloudformation:DescribeChangeSet
+              - cloudformation:ExecuteChangeSet
+              - cloudformation:DeleteChangeSet
+            Resource: !Sub arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/onward-${Environment}-ecs*/*
+          - Sid: ReadTemplateDetails
+            Effect: Allow
+            Action:
+              - cloudformation:ValidateTemplate
+              - cloudformation:GetTemplateSummary
+            Resource: '*'
+          - Sid: HandDeployRoleToCloudFormationOnly
+            Effect: Allow
+            Action: iam:PassRole
+            Resource: !Ref DeployRoleArn
+            Condition:
+              StringEquals:
+                iam:PassedToService: cloudformation.amazonaws.com
+
+  # ---------- The role the infrastructure repo's GitHub Actions assumes ----------
+
+  InfraActionsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: Assumed by GitHub Actions in the infrastructure repo main branch, via OIDC, to deploy the nested stacks.
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If
+                - CreateOidc
+                - !Ref GitHubOidcProvider
+                - !Sub arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                'token.actions.githubusercontent.com:aud': sts.amazonaws.com
+                'token.actions.githubusercontent.com:sub': !Sub repo:${GitHubOwner}@${GitHubOwnerId}/${InfraRepoName}@${InfraRepoId}:ref:refs/heads/main
+      ManagedPolicyArns:
+        - !Ref InfraDeployPolicy
+      Tags:
+        - Key: Name
+          Value: !Sub onward-${Environment}-github-infra-deploy-role
+
 Outputs:
   RepositoryName:
     Value: !Ref OrdersRepository
@@ -151,3 +257,9 @@ Outputs:
   GitHubActionsRoleArn:
     Description: Put this in the app repo as a GitHub variable (not a secret, it is not sensitive).
     Value: !GetAtt GitHubActionsRole.Arn
+  TemplatesBucketName:
+    Description: Where the infrastructure workflow uploads child templates.
+    Value: !Ref TemplatesBucket
+  InfraActionsRoleArn:
+    Description: Put this in the infrastructure repo as the GitHub variable AWS_INFRA_ROLE_ARN.
+    Value: !GetAtt InfraActionsRole.Arn

@@ -5,6 +5,9 @@ parameters:
   GitHubOwnerId: '330395797'
   AppRepoName: onward-orders-app
   AppRepoId: '1446399180'
+  InfraRepoName: onward-orders-infrastructure
+  InfraRepoId: '1446350789'
+  DeployRoleArn: arn:aws:iam::438465164038:role/onward-dev-cloudformation-deploy-role
   CreateGitHubOidcProvider: 'true'
 tags:
   Project: onward
